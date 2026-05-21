@@ -29,44 +29,77 @@ from portfolio import (
 )
 
 # ============================================================
-#  持久化：自定义标的（云端用session_state代替文件）
+#  持久化：自选标的（云端用session_state）
 # ============================================================
 
-def load_custom_stocks():
-    """云端版：自定义标的存在session_state"""
-    if "custom_stocks" not in st.session_state:
-        st.session_state.custom_stocks = {"a_stock": {}, "crypto": {}}
-    return st.session_state.custom_stocks
+STOCKS_KEY = "my_stocks"
 
-def save_custom_stocks(data):
-    st.session_state.custom_stocks = data
+def _default_stocks():
+    """默认自选列表，从config初始化"""
+    return {
+        "a_stock": dict(A_STOCKS),
+        "crypto": dict(CRYPTO),
+    }
+
+def load_my_stocks():
+    if STOCKS_KEY not in st.session_state:
+        st.session_state[STOCKS_KEY] = _default_stocks()
+    return st.session_state[STOCKS_KEY]
+
+def save_my_stocks(data):
+    st.session_state[STOCKS_KEY] = data
+
+def add_stock(market, code, name):
+    stocks = load_my_stocks()
+    key = "a_stock" if market == "A股" else "crypto"
+    stocks[key][code] = name
+    save_my_stocks(stocks)
+
+def remove_stock(code):
+    stocks = load_my_stocks()
+    for key in ["a_stock", "crypto"]:
+        stocks[key].pop(code, None)
+    save_my_stocks(stocks)
 
 def get_all_stocks():
-    custom = load_custom_stocks()
-    all_a = {**A_STOCKS, **custom.get("a_stock", {})}
-    all_crypto = {**CRYPTO, **custom.get("crypto", {})}
-    return all_a, all_crypto
+    stocks = load_my_stocks()
+    return stocks.get("a_stock", {}), stocks.get("crypto", {})
+
+def format_stock_label(code, name, market=""):
+    """格式化下拉菜单显示"""
+    return f"{name}（{code}）{market}"
+
+def build_stock_options(all_a, all_crypto):
+    """构建下拉选项，返回 {显示文本: 代码}"""
+    options = {}
+    for code, name in all_a.items():
+        options[format_stock_label(code, name, "A股")] = code
+    for code, name in all_crypto.items():
+        options[format_stock_label(code, name, "加密")] = code
+    return options
 
 
 # ============================================================
 #  模拟交易（云端用session_state）
 # ============================================================
 
+PF_KEY = "portfolio"
+
 def load_pf():
-    if "portfolio" not in st.session_state:
-        st.session_state.portfolio = {
+    if PF_KEY not in st.session_state:
+        st.session_state[PF_KEY] = {
             "cash": 1000000.0,
             "positions": {},
             "history": [],
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
-    return st.session_state.portfolio
+    return st.session_state[PF_KEY]
 
 def save_pf(pf):
-    st.session_state.portfolio = pf
+    st.session_state[PF_KEY] = pf
 
 def reset_pf():
-    st.session_state.portfolio = {
+    st.session_state[PF_KEY] = {
         "cash": 1000000.0,
         "positions": {},
         "history": [],
@@ -92,17 +125,17 @@ with st.sidebar:
     st.markdown("A股 + 加密货币 · 多策略评分")
     st.markdown("---")
 
-    page = st.radio("功能导航", ["📊 信号总览", "📈 个股分析", "💼 模拟交易", "⚙️ 自定义标的"], index=0)
+    page = st.radio("功能导航", ["📊 信号总览", "📈 个股分析", "💼 模拟交易", "⚙️ 自选管理"], index=0)
 
     st.markdown("---")
     st.subheader("策略权重")
     weights = {}
+    label_map = {
+        "ma_cross": "均线交叉", "rsi": "RSI", "bollinger": "布林带",
+        "macd": "MACD", "volume": "成交量", "momentum": "动量",
+        "position": "历史位置",
+    }
     for k, default_v in STRATEGY_WEIGHTS.items():
-        label_map = {
-            "ma_cross": "均线交叉", "rsi": "RSI", "bollinger": "布林带",
-            "macd": "MACD", "volume": "成交量", "momentum": "动量",
-            "position": "历史位置",
-        }
         weights[k] = st.slider(label_map.get(k, k), 0.0, 3.0, default_v, 0.1, key=f"w_{k}")
 
     st.markdown("---")
@@ -159,6 +192,17 @@ def analyze_one(df, params, wt):
         details[sname] = d
     score = compute_score(signals, wt)
     return score, signals, details
+
+
+def fetch_price(code, is_crypto=False):
+    """获取最新价格"""
+    try:
+        df = fetch_crypto(code, 5) if is_crypto else fetch_a_stock(code, 5)
+        if df is not None and len(df) > 0:
+            return df["close"].iloc[-1]
+    except Exception:
+        pass
+    return None
 
 
 # ============================================================
@@ -224,14 +268,14 @@ if page == "📊 信号总览":
                 with st.expander(f"{r['name']}（{r['symbol']}）— 评分 {r['score']}"):
                     st.write(f"现价: {r['price']:.3f} | 止损: {r['stop_loss']:.3f}")
                     for k, v in r["details"].items():
-                        st.write(f"- **{k}**: {v}")
+                        st.write(f"- **{label_map.get(k, k)}**: {v}")
         if sell:
             st.subheader("🔴 卖出信号")
             for r in sell:
                 with st.expander(f"{r['name']}（{r['symbol']}）— 评分 {r['score']}"):
                     st.write(f"现价: {r['price']:.3f}")
                     for k, v in r["details"].items():
-                        st.write(f"- **{k}**: {v}")
+                        st.write(f"- **{label_map.get(k, k)}**: {v}")
     else:
         st.info("👆 点击「立即扫描」开始")
 
@@ -242,26 +286,32 @@ elif page == "📈 个股分析":
     st.header("📈 个股分析")
 
     all_a, all_crypto = get_all_stocks()
-    all_options = {**{f"{v}（{k}）A股": k for k, v in all_a.items()},
-                   **{f"{v}（{k}）加密": k for k, v in all_crypto.items()}}
+    options = build_stock_options(all_a, all_crypto)
 
-    col1, col2 = st.columns([3, 2])
-    with col1:
-        selected = st.selectbox("选择标的", list(all_options.keys()), index=0)
-    with col2:
-        custom_code = st.text_input("或输入代码", placeholder="如 600519 或 BTC/USDT")
+    selected = st.selectbox("选择标的", list(options.keys()), index=0)
+    code = options.get(selected, "")
 
-    code = custom_code.strip() if custom_code.strip() else all_options.get(selected, "")
     if code:
         is_crypto = "/" in code
-        with st.spinner(f"获取 {code} 数据..."):
+        market_label = "加密货币" if is_crypto else "A股"
+        name = all_crypto.get(code, code) if is_crypto else all_a.get(code, code)
+
+        col_info, col_del = st.columns([5, 1])
+        with col_info:
+            pass
+        with col_del:
+            if st.button("🗑️ 移出自选"):
+                remove_stock(code)
+                st.success(f"已移除 {name}")
+                st.rerun()
+
+        with st.spinner(f"获取 {name} 数据..."):
             df = fetch_crypto(code, 250) if is_crypto else fetch_a_stock(code, 250)
 
         if df is None or len(df) < 30:
             st.error(f"无法获取 {code} 的数据")
         else:
             score, signals, details = analyze_one(df, STRATEGY_PARAMS, weights)
-            name = all_crypto.get(code, code) if is_crypto else all_a.get(code, code)
 
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("现价", f"{df['close'].iloc[-1]:.3f}")
@@ -272,11 +322,6 @@ elif page == "📈 个股分析":
 
             st.plotly_chart(draw_kline(df, f"{name}（{code}）"), use_container_width=True)
 
-            label_map = {
-                "ma_cross": "均线交叉", "rsi": "RSI", "bollinger": "布林带",
-                "macd": "MACD", "volume": "成交量", "momentum": "动量",
-                "position": "历史位置",
-            }
             st.subheader("策略详情")
             detail_rows = [{"策略": label_map.get(k, k), "信号": details.get(k, ""), "得分": signals.get(k, 0)} for k in STRATEGIES]
             st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
@@ -292,17 +337,10 @@ elif page == "💼 模拟交易":
 
     # 获取当前价格
     current_prices = {}
-    price_placeholder = st.empty()
     with st.spinner("更新持仓价格..."):
         for sym, pos in pf["positions"].items():
-            try:
-                df = fetch_crypto(sym, 5) if pos["market"] == "加密货币" else fetch_a_stock(sym, 5)
-                if df is not None and len(df) > 0:
-                    current_prices[sym] = df["close"].iloc[-1]
-                else:
-                    current_prices[sym] = pos["avg_cost"]
-            except Exception:
-                current_prices[sym] = pos["avg_cost"]
+            price = fetch_price(sym, pos["market"] == "加密货币")
+            current_prices[sym] = price if price else pos["avg_cost"]
 
     summary = get_portfolio_summary(pf, current_prices)
 
@@ -314,61 +352,63 @@ elif page == "💼 模拟交易":
 
     st.subheader("📋 当前持仓")
     if summary["positions"]:
-        pos_df = pd.DataFrame(summary["positions"])
-        # 颜色标记盈亏
-        def color_profit(val):
-            if isinstance(val, str) and val.startswith("+"):
-                return "color: #4CAF50"
-            elif isinstance(val, str) and val.startswith("-"):
-                return "color: #f44336"
-            return ""
-        styled = pos_df.style.map(color_profit, subset=["盈亏%"])
-        st.dataframe(pos_df, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(summary["positions"]), use_container_width=True, hide_index=True)
     else:
-        st.info("暂无持仓，去买入吧 🐸")
+        st.info("暂无持仓，去买点吧 🐸")
 
     st.markdown("---")
+
+    # 构建买卖用的下拉选项
+    buy_options = build_stock_options(all_a, all_crypto)
+
     col_buy, col_sell = st.columns(2)
 
     with col_buy:
         st.subheader("🟢 买入")
-        buy_code = st.text_input("代码", placeholder="600519 或 BTC/USDT", key="buy_code")
+        buy_selected = st.selectbox("选择标的", list(buy_options.keys()), key="buy_select")
+        buy_code = buy_options.get(buy_selected, "")
+        is_crypto_buy = "/" in buy_code
+        buy_name = all_crypto.get(buy_code, buy_code) if is_crypto_buy else all_a.get(buy_code, buy_code)
+        market_label_buy = "加密货币" if is_crypto_buy else "A股"
+
+        # 显示当前价格
+        if buy_code:
+            with st.spinner("获取价格..."):
+                cur_price = fetch_price(buy_code, is_crypto_buy)
+            if cur_price:
+                st.info(f"💡 {buy_name} 当前价格: **{cur_price:.3f}**")
+
         buy_amount = st.number_input("数量（0=自动1/4仓位）", min_value=0, value=0, step=100, key="buy_amount")
-        if st.button("✅ 确认买入", key="buy_btn", use_container_width=True):
-            if not buy_code.strip():
-                st.warning("请输入代码")
-            else:
-                code = buy_code.strip()
-                is_crypto = "/" in code
-                name = all_crypto.get(code, code) if is_crypto else all_a.get(code, code)
-                market_label = "加密货币" if is_crypto else "A股"
-                df = fetch_crypto(code, 5) if is_crypto else fetch_a_stock(code, 5)
-                if df is not None and len(df) > 0:
-                    price = df["close"].iloc[-1]
-                    amt = buy_amount if buy_amount > 0 else None
-                    pf, ok, msg = pf_buy(pf, code, name, market_label, price, amt)
-                    if ok:
-                        save_pf(pf)
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
+        if st.button("✅ 确认买入", key="buy_btn", use_container_width=True, type="primary"):
+            if cur_price:
+                amt = buy_amount if buy_amount > 0 else None
+                pf, ok, msg = pf_buy(pf, buy_code, buy_name, market_label_buy, cur_price, amt)
+                if ok:
+                    save_pf(pf)
+                    st.success(msg)
+                    st.rerun()
                 else:
-                    st.error("无法获取数据")
+                    st.error(msg)
+            else:
+                st.error("无法获取价格")
 
     with col_sell:
         st.subheader("🔴 卖出")
         sell_options = list(pf["positions"].keys())
         if sell_options:
-            sell_code = st.selectbox("卖出标的", sell_options, key="sell_code",
+            sell_code = st.selectbox("选择持仓", sell_options, key="sell_select",
                                       format_func=lambda x: f"{pf['positions'][x]['name']}({x}) {pf['positions'][x]['shares']}股")
+            sell_name = pf["positions"][sell_code]["name"]
+            is_crypto_sell = pf["positions"][sell_code]["market"] == "加密货币"
+            cur_sell_price = fetch_price(sell_code, is_crypto_sell)
+            if cur_sell_price:
+                st.info(f"💡 {sell_name} 当前价格: **{cur_sell_price:.3f}**")
+
             sell_amount = st.number_input("数量（0=清仓）", min_value=0, value=0, step=100, key="sell_amount")
-            if st.button("✅ 确认卖出", key="sell_btn", use_container_width=True):
-                df = fetch_crypto(sell_code, 5) if "/" in sell_code else fetch_a_stock(sell_code, 5)
-                if df is not None and len(df) > 0:
-                    price = df["close"].iloc[-1]
+            if st.button("✅ 确认卖出", key="sell_btn", use_container_width=True, type="primary"):
+                if cur_sell_price:
                     amt = sell_amount if sell_amount > 0 else None
-                    pf, ok, msg = pf_sell(pf, sell_code, price, amt)
+                    pf, ok, msg = pf_sell(pf, sell_code, cur_sell_price, amt)
                     if ok:
                         save_pf(pf)
                         st.success(msg)
@@ -376,9 +416,9 @@ elif page == "💼 模拟交易":
                     else:
                         st.error(msg)
                 else:
-                    st.error("无法获取数据")
+                    st.error("无法获取价格")
         else:
-            st.info("暂无持仓")
+            st.info("暂无持仓可卖")
 
     st.markdown("---")
     col_hist, col_reset = st.columns([4, 1])
@@ -395,77 +435,98 @@ elif page == "💼 模拟交易":
             st.rerun()
 
 # ============================================================
-#  页面4: 自定义标的
+#  页面4: 自选管理
 # ============================================================
-elif page == "⚙️ 自定义标的":
-    st.header("⚙️ 自定义标的")
-    st.caption("添加的标的会在下次扫描时自动纳入")
+elif page == "⚙️ 自选管理":
+    st.header("⚙️ 自选管理")
+    st.caption("管理你的自选标的列表，移除不想看的、添加想关注的")
 
-    custom = load_custom_stocks()
-    col_a, col_c = st.columns(2)
+    all_a, all_crypto = get_all_stocks()
 
-    with col_a:
-        st.subheader("🇨🇳 A股")
-        if custom.get("a_stock"):
-            for code, name in list(custom["a_stock"].items()):
-                c1, c2 = st.columns([4, 1])
-                c1.text(f"📌 {name}（{code}）")
-                if c2.button("🗑️", key=f"del_a_{code}"):
-                    del custom["a_stock"][code]
-                    save_custom_stocks(custom)
-                    st.rerun()
+    # 当前自选列表
+    st.subheader("📋 当前自选")
+
+    tab_a, tab_c = st.tabs([f"🇨🇳 A股（{len(all_a)}只）", f"🪙 加密货币（{len(all_crypto)}个）"])
+
+    with tab_a:
+        if all_a:
+            cols_per_row = 4
+            codes = list(all_a.keys())
+            names = list(all_a.values())
+            for i in range(0, len(codes), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j, col in enumerate(cols):
+                    if i + j < len(codes):
+                        c = codes[i + j]
+                        n = names[i + j]
+                        col.markdown(f"**{n}** `{c}`")
+                        if col.button("移除", key=f"rm_a_{c}"):
+                            remove_stock(c)
+                            st.rerun()
         else:
-            st.info("暂无自定义A股")
+            st.info("暂无A股自选")
 
         st.markdown("---")
         st.markdown("**➕ 添加A股**")
-        new_a_code = st.text_input("股票代码", placeholder="如 002226", key="new_a_code")
-        new_a_name = st.text_input("股票名称", placeholder="如 江南化工", key="new_a_name")
-        if st.button("➕ 添加", key="add_a"):
-            if new_a_code.strip() and new_a_name.strip():
-                with st.spinner("验证数据..."):
-                    df = fetch_a_stock(new_a_code.strip(), 30)
-                if df is not None and len(df) >= 30:
-                    if "a_stock" not in custom:
-                        custom["a_stock"] = {}
-                    custom["a_stock"][new_a_code.strip()] = new_a_name.strip()
-                    save_custom_stocks(custom)
-                    st.success(f"✅ 已添加 {new_a_name.strip()}（{new_a_code.strip()}）")
-                    st.rerun()
-                else:
-                    st.error("❌ 无法获取该股票数据")
-            else:
-                st.warning("请输入代码和名称")
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c1:
+            new_a_code = st.text_input("股票代码", placeholder="如 002226", key="new_a_code")
+        with c2:
+            new_a_name = st.text_input("股票名称", placeholder="如 江南化工", key="new_a_name")
+        with c3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("➕ 添加", key="add_a"):
+                if new_a_code.strip() and new_a_name.strip():
+                    with st.spinner("验证数据..."):
+                        df = fetch_a_stock(new_a_code.strip(), 30)
+                    if df is not None and len(df) >= 30:
+                        add_stock("A股", new_a_code.strip(), new_a_name.strip())
+                        st.success(f"✅ 已添加 {new_a_name.strip()}")
+                        st.rerun()
+                    else:
+                        st.error("❌ 无法获取该股票数据")
 
-    with col_c:
-        st.subheader("🪙 加密货币")
-        if custom.get("crypto"):
-            for code, name in list(custom["crypto"].items()):
-                c1, c2 = st.columns([4, 1])
-                c1.text(f"📌 {name}（{code}）")
-                if c2.button("🗑️", key=f"del_c_{code}"):
-                    del custom["crypto"][code]
-                    save_custom_stocks(custom)
-                    st.rerun()
+    with tab_c:
+        if all_crypto:
+            cols_per_row = 4
+            codes = list(all_crypto.keys())
+            names = list(all_crypto.values())
+            for i in range(0, len(codes), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j, col in enumerate(cols):
+                    if i + j < len(codes):
+                        c = codes[i + j]
+                        n = names[i + j]
+                        col.markdown(f"**{n}** `{c}`")
+                        if col.button("移除", key=f"rm_c_{c}"):
+                            remove_stock(c)
+                            st.rerun()
         else:
-            st.info("暂无自定义加密货币")
+            st.info("暂无加密货币自选")
 
         st.markdown("---")
         st.markdown("**➕ 添加加密货币**")
-        new_c_code = st.text_input("交易对", placeholder="如 LINK/USDT", key="new_c_code")
-        new_c_name = st.text_input("名称", placeholder="如 ChainLink", key="new_c_name")
-        if st.button("➕ 添加", key="add_c"):
-            if new_c_code.strip() and new_c_name.strip():
-                with st.spinner("验证数据..."):
-                    df = fetch_crypto(new_c_code.strip(), 30)
-                if df is not None and len(df) >= 30:
-                    if "crypto" not in custom:
-                        custom["crypto"] = {}
-                    custom["crypto"][new_c_code.strip()] = new_c_name.strip()
-                    save_custom_stocks(custom)
-                    st.success(f"✅ 已添加 {new_c_name.strip()}（{new_c_code.strip()}）")
-                    st.rerun()
-                else:
-                    st.error("❌ 无法获取该交易对数据")
-            else:
-                st.warning("请输入交易对和名称")
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c1:
+            new_c_code = st.text_input("交易对", placeholder="如 LINK/USDT", key="new_c_code")
+        with c2:
+            new_c_name = st.text_input("名称", placeholder="如 ChainLink", key="new_c_name")
+        with c3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("➕ 添加", key="add_c"):
+                if new_c_code.strip() and new_c_name.strip():
+                    with st.spinner("验证数据..."):
+                        df = fetch_crypto(new_c_code.strip(), 30)
+                    if df is not None and len(df) >= 30:
+                        add_stock("加密货币", new_c_code.strip(), new_c_name.strip())
+                        st.success(f"✅ 已添加 {new_c_name.strip()}")
+                        st.rerun()
+                    else:
+                        st.error("❌ 无法获取该交易对数据")
+
+    # 恢复默认
+    st.markdown("---")
+    if st.button("🔄 恢复默认自选列表"):
+        st.session_state[STOCKS_KEY] = _default_stocks()
+        st.success("已恢复默认列表")
+        st.rerun()
