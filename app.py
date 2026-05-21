@@ -11,11 +11,6 @@ import threading
 from datetime import datetime
 
 import streamlit as st
-try:
-    from streamlit_autorefresh import st_autorefresh
-    HAS_AUTOREFRESH = True
-except ImportError:
-    HAS_AUTOREFRESH = False
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
@@ -332,10 +327,10 @@ def fetch_price(code, is_crypto=False):
 #  Tab 1: 信号总览（紧凑表格 + 排序 + 展开）
 # ============================================================
 with tabs[0]:
-    # 扫描进行中：自动刷新
+    # 扫描进行中：定时刷新
     if _scan_state["is_scanning"]:
-        if HAS_AUTOREFRESH:
-            st_autorefresh(interval=5000, key="scan_refresh")
+        # 用meta标签实现自动刷新（5秒），纯HTML不需要额外包
+        st.markdown('<meta http-equiv="refresh" content="5">', unsafe_allow_html=True)
 
     results = st.session_state.get("scan_results", [])
     scan_time = st.session_state.get("scan_time", "未扫描")
