@@ -11,7 +11,11 @@ import threading
 from datetime import datetime
 
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
@@ -330,7 +334,8 @@ def fetch_price(code, is_crypto=False):
 with tabs[0]:
     # 扫描进行中：自动刷新
     if _scan_state["is_scanning"]:
-        st_autorefresh(interval=5000, key="scan_refresh")
+        if HAS_AUTOREFRESH:
+            st_autorefresh(interval=5000, key="scan_refresh")
 
     results = st.session_state.get("scan_results", [])
     scan_time = st.session_state.get("scan_time", "未扫描")
@@ -345,7 +350,7 @@ with tabs[0]:
         # 排序控件
         col_sort, col_market = st.columns([1, 2])
         with col_sort:
-            sort_by = st.selectbox("排序", ["评分↓", "评分↑", "名称A-Z", "名称Z-A", "5日涨幅↓", "5日涨幅↓"], index=0, key="sort_sel")
+            sort_by = st.selectbox("排序", ["评分↓", "评分↑", "名称A-Z", "名称Z-A", "5日涨幅↓", "5日涨幅↑"], index=0, key="sort_sel")
         with col_market:
             filter_market = st.selectbox("筛选", ["全部", "A股", "加密货币"], key="filter_market")
 
@@ -364,6 +369,10 @@ with tabs[0]:
         }
         if sort_by in sort_map:
             ranked = sorted(filtered, key=sort_map[sort_by])
+        elif "5日涨幅↓" in sort_by:
+            ranked = sorted(filtered, key=lambda x: -x.get("momentum_pct", 0))
+        elif "5日涨幅↑" in sort_by:
+            ranked = sorted(filtered, key=lambda x: x.get("momentum_pct", 0))
         else:
             ranked = sorted(filtered, key=lambda x: -x["score"])
 
@@ -382,14 +391,16 @@ with tabs[0]:
         for r in ranked:
             # 计算5日涨跌
             pct5_str = ""
+            pct5_val = 0
             if "signals" in r:
                 mom_detail = r.get("details", {}).get("momentum", "")
                 if "%" in mom_detail:
-                    # 从动量描述中提取百分比
                     import re
                     m = re.search(r'([+-]?\d+\.?\d*)%', mom_detail)
                     if m:
-                        pct5_str = f"{float(m.group(1)):+.1f}%"
+                        pct5_val = float(m.group(1))
+                        pct5_str = f"{pct5_val:+.1f}%"
+            r["momentum_pct"] = pct5_val
 
             table_rows.append({
                 "信号": f"{signal_emoji(r['score'])}",
