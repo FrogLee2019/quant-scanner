@@ -89,13 +89,28 @@ def fetch_a_stock(symbol, days=120):
     return None
 
 
-def fetch_crypto(symbol, days=120):
-    """获取加密货币日线数据（Gate优先，Huobi备选）"""
+def fetch_crypto(symbol, days=120, timeout=15):
+    """获取加密货币日线数据（Gate优先，Huobi备选），单源超时timeout秒"""
     import ccxt
+    import signal
+    import time as _time
+
+    def _fetch_with_timeout(exchange, sym, d, secs):
+        """用线程+超时拉数据，超时返回None"""
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FTimeout
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(exchange.fetch_ohlcv, sym, timeframe="1d", limit=d)
+            try:
+                return fut.result(timeout=secs)
+            except FTimeout:
+                return None
+            except Exception:
+                return None
+
     for exchange_name in ["gate", "huobi"]:
         try:
-            exchange = getattr(ccxt, exchange_name)({"timeout": 30000})
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe="1d", limit=days)
+            exchange = getattr(ccxt, exchange_name)({"timeout": timeout * 1000})
+            ohlcv = _fetch_with_timeout(exchange, symbol, days, timeout)
             if ohlcv and len(ohlcv) >= 30:
                 df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
                 df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
@@ -104,7 +119,7 @@ def fetch_crypto(symbol, days=120):
                 return df
         except Exception:
             continue
-    print(f"  [ERROR] 加密货币 {symbol}: 所有数据源均失败")
+    print(f"  [WARN] 加密货币 {symbol}: 数据获取超时或失败，跳过")
     return None
 
 

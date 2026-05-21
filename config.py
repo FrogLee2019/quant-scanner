@@ -34,7 +34,6 @@ CRYPTO = {
     "XRP/USDT": "瑞波币",
     "ADA/USDT": "艾达币",
     "DOGE/USDT": "狗狗币",
-    "AVAX/USDT": "雪崩",
 }
 
 # ===== 策略参数 =====
