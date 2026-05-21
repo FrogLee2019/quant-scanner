@@ -174,14 +174,14 @@ if page == "📊 信号总览":
         if st.button("🔄 立即扫描", use_container_width=True, type="primary"):
             st.session_state["trigger_scan"] = True
 
-    if st.session_state.get("trigger_scan", False) or "scan_results" not in st.session_state:
+    if st.session_state.get("trigger_scan", False):
         market_arg = {"全部": "all", "A股": "a_stock", "加密货币": "crypto"}[market]
         all_a, all_crypto = get_all_stocks()
         import config as cfg_mod
         orig_a, orig_c = cfg_mod.A_STOCKS, cfg_mod.CRYPTO
         cfg_mod.A_STOCKS, cfg_mod.CRYPTO = all_a, all_crypto
 
-        with st.spinner("🔍 扫描中，请稍候..."):
+        with st.spinner("🔍 扫描中，首次可能需要1-2分钟..."):
             results = scan_market(market_arg)
             st.session_state["scan_results"] = results
             st.session_state["scan_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

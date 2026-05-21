@@ -57,7 +57,8 @@ def fetch_a_stock(symbol, days=120):
             return df.tail(days)
     except Exception:
         try:
-            bs.logout()
+            with contextlib.redirect_stdout(io.StringIO()):
+                bs.logout()
         except Exception:
             pass
 
