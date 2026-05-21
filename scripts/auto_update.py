@@ -1,36 +1,46 @@
 """
 🐸 量化信号扫描 - 自动更新监控
-后台运行，每隔一段时间检查GitHub是否有更新，有则自动拉取并重启Streamlit
-
-使用方法：
-  python auto_update.py          # 前台运行
-  python auto_update.py --daemon  # 后台守护进程模式（仅Linux/Mac）
-
-更新逻辑：
-  1. git fetch 检查远程是否有新commit
-  2. 有更新 → git pull → 重启Streamlit
-  3. 无更新 → 什么都不做
+后台运行，每隔5分钟检查GitHub是否有更新，有则自动拉取并重启Streamlit
 """
 
 import subprocess
 import sys
 import os
 import time
-import signal
-import threading
 
 CHECK_INTERVAL = 300  # 5分钟检查一次
-REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 自动检测项目目录
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", ".."))
 BRANCH = "main"
 streamlit_process = None
 
 
+def get_python():
+    """获取Python路径（兼容便携版）"""
+    # 便携版Python
+    portable_python = os.path.normpath(os.path.join(REPO_DIR, "..", "python", "python.exe"))
+    if os.path.exists(portable_python):
+        return portable_python
+    # 系统Python
+    return sys.executable
+
+
+def get_git():
+    """获取Git路径（兼容便携版）"""
+    portable_git = os.path.normpath(os.path.join(REPO_DIR, "..", "git", "bin", "git.exe"))
+    if os.path.exists(portable_git):
+        return portable_git
+    return "git"
+
+
 def run_cmd(cmd, cwd=None):
-    """执行命令并返回输出"""
     try:
         result = subprocess.run(
             cmd, shell=True, capture_output=True, text=True,
-            cwd=cwd or REPO_DIR, timeout=30
+            cwd=cwd or REPO_DIR, timeout=30,
+            env={**os.environ, "GIT_SSL_NO_VERIFY": "1"}
         )
         return result.stdout.strip(), result.returncode
     except Exception as e:
@@ -38,49 +48,49 @@ def run_cmd(cmd, cwd=None):
 
 
 def check_and_update():
-    """检查GitHub是否有更新，有则拉取"""
-    # fetch远程最新
-    out, code = run_cmd("git fetch origin")
+    git = get_git()
+    out, code = run_cmd(f'"{git}" fetch origin')
     if code != 0:
         print(f"  [WARN] git fetch 失败: {out}")
         return False
 
-    # 对比本地和远程
-    out, code = run_cmd(f"git rev-parse HEAD")
+    out, _ = run_cmd(f'"{git}" rev-parse HEAD')
     local_hash = out
-    out, code = run_cmd(f"git rev-parse origin/{BRANCH}")
+    out, _ = run_cmd(f'"{git}" rev-parse origin/{BRANCH}')
     remote_hash = out
 
     if local_hash == remote_hash:
-        return False  # 无更新
+        return False
 
     print(f"  📦 发现更新！")
     print(f"     本地: {local_hash[:8]}")
     print(f"     远程: {remote_hash[:8]}")
 
-    # 拉取更新
-    out, code = run_cmd(f"git pull origin {BRANCH}")
+    out, code = run_cmd(f'"{git}" pull origin {BRANCH}')
     if code != 0:
         print(f"  [ERROR] git pull 失败: {out}")
         return False
 
-    # 更新依赖
-    run_cmd("pip install -r cloud_deploy/requirements.txt -q")
+    python = get_python()
+    pip = os.path.join(os.path.dirname(python), "Scripts", "pip.exe")
+    if not os.path.exists(pip):
+        pip = os.path.join(os.path.dirname(python), "Scripts", "pip")
+    run_cmd(f'"{pip}" install -r cloud_deploy/requirements.txt -q')
 
     print(f"  ✅ 代码已更新到最新版本")
     return True
 
 
 def start_streamlit():
-    """启动Streamlit"""
     global streamlit_process
     if streamlit_process and streamlit_process.poll() is None:
         streamlit_process.terminate()
         streamlit_process.wait(timeout=10)
 
+    python = get_python()
     print("  🚀 启动 Streamlit...")
     streamlit_process = subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run",
+        [python, "-m", "streamlit", "run",
          "cloud_deploy/app.py",
          "--server.port", "8501",
          "--server.headless", "true"],
@@ -91,7 +101,6 @@ def start_streamlit():
 
 
 def stop_streamlit():
-    """停止Streamlit"""
     global streamlit_process
     if streamlit_process and streamlit_process.poll() is None:
         print("  🛑 正在停止 Streamlit...")
@@ -104,15 +113,13 @@ def stop_streamlit():
 
 
 def monitor_loop():
-    """主监控循环"""
     print("=" * 50)
     print("  🐸 量化扫描 - 自动更新监控")
     print(f"  检查间隔: {CHECK_INTERVAL // 60} 分钟")
-    print(f"  仓库目录: {REPO_DIR}")
+    print(f"  项目目录: {REPO_DIR}")
     print("=" * 50)
     print()
 
-    # 首次启动
     start_streamlit()
 
     while True:
