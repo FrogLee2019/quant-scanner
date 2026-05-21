@@ -1,0 +1,6 @@
+.git
+__pycache__
+*.pyc
+reports/
+portfolio.json
+custom_stocks.json
