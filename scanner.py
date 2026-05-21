@@ -319,8 +319,10 @@ def _fetch_and_scan(sym, name, market, params, weights, lookback):
     return _scan_one(df, name, sym, market, params, weights)
 
 
-def scan_market(market_type="all", max_workers=8):
-    """并发扫描市场，max_workers 控制并发数"""
+def scan_market(market_type="all", max_workers=8, on_progress=None):
+    """并发扫描市场，max_workers 控制并发数
+    on_progress: 可选回调 on_progress(completed, total, symbol, name)
+    """
     from config import A_STOCKS, CRYPTO, STRATEGY_PARAMS, STRATEGY_WEIGHTS, LOOKBACK_DAYS
     # 加载自定义标的
     custom_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "custom_stocks.json")
@@ -344,7 +346,9 @@ def scan_market(market_type="all", max_workers=8):
         for sym, name in all_crypto.items():
             tasks.append((sym, name, "加密货币"))
 
-    print(f"\n{'='*50}\n并发扫描 {len(tasks)} 个标的（{max_workers}线程）...\n{'='*50}")
+    total = len(tasks)
+    if on_progress:
+        on_progress(0, total, "", "准备中...")
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {}
@@ -352,17 +356,21 @@ def scan_market(market_type="all", max_workers=8):
             f = pool.submit(_fetch_and_scan, sym, name, market, STRATEGY_PARAMS, STRATEGY_WEIGHTS, LOOKBACK_DAYS)
             futures[f] = (sym, name, market)
 
+        completed = 0
         for f in as_completed(futures):
             sym, name, market = futures[f]
+            completed += 1
             try:
                 r = f.result(timeout=60)
                 if r:
-                    print(f"  ✅ {name}({sym}) 评分 {r['score']}")
                     results.append(r)
-                else:
-                    print(f"  ⏭️ {name}({sym}) 跳过(数据不足)")
             except Exception as e:
-                print(f"  ❌ {name}({sym}) 异常: {e}")
+                pass
+            if on_progress:
+                try:
+                    on_progress(completed, total, sym, name)
+                except Exception:
+                    pass
 
     return results
 
