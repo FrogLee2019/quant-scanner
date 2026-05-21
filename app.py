@@ -205,6 +205,44 @@ def fetch_price(code, is_crypto=False):
     return None
 
 
+def lookup_stock_name(code):
+    """通过代码自动查询股票名称"""
+    is_crypto = "/" in code
+    if is_crypto:
+        # 加密货币：从交易对提取，如 BTC/USDT -> 比特币
+        crypto_names = {
+            "BTC/USDT": "比特币", "ETH/USDT": "以太坊", "SOL/USDT": "Solana",
+            "BNB/USDT": "币安币", "XRP/USDT": "瑞波币", "ADA/USDT": "艾达币",
+            "DOGE/USDT": "狗狗币", "AVAX/USDT": "雪崩", "DOT/USDT": "波卡",
+            "LINK/USDT": "ChainLink", "MATIC/USDT": "Polygon", "SHIB/USDT": "柴犬币",
+            "UNI/USDT": "Uniswap", "LTC/USDT": "莱特币", "ATOM/USDT": "Cosmos",
+        }
+        return crypto_names.get(code, code.split("/")[0])
+    
+    # A股：用baostock查
+    try:
+        import baostock as bs
+        import io, contextlib
+        prefix = "sh." if code.startswith("6") or code.startswith("51") else "sz."
+        with contextlib.redirect_stdout(io.StringIO()):
+            bs.login()
+        rs = bs.query_stock_basic(code=prefix + code)
+        name = None
+        while (rs.error_code == "0") and rs.next():
+            row = rs.get_row_data()
+            if len(row) > 1:
+                name = row[1]
+                break
+        with contextlib.redirect_stdout(io.StringIO()):
+            bs.logout()
+        if name:
+            return name
+    except Exception:
+        pass
+    
+    return None
+
+
 # ============================================================
 #  页面1: 信号总览
 # ============================================================
@@ -468,23 +506,23 @@ elif page == "⚙️ 自选管理":
 
         st.markdown("---")
         st.markdown("**➕ 添加A股**")
-        c1, c2, c3 = st.columns([2, 2, 1])
-        with c1:
-            new_a_code = st.text_input("股票代码", placeholder="如 002226", key="new_a_code")
-        with c2:
-            new_a_name = st.text_input("股票名称", placeholder="如 江南化工", key="new_a_name")
-        with c3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ 添加", key="add_a"):
-                if new_a_code.strip() and new_a_name.strip():
-                    with st.spinner("验证数据..."):
-                        df = fetch_a_stock(new_a_code.strip(), 30)
+        new_a_code = st.text_input("输入股票代码", placeholder="如 002226", key="new_a_code")
+        if st.button("➕ 添加", key="add_a"):
+            if new_a_code.strip():
+                code = new_a_code.strip()
+                with st.spinner("查询中..."):
+                    name = lookup_stock_name(code)
+                if name:
+                    # 验证数据可用
+                    df = fetch_a_stock(code, 30)
                     if df is not None and len(df) >= 30:
-                        add_stock("A股", new_a_code.strip(), new_a_name.strip())
-                        st.success(f"✅ 已添加 {new_a_name.strip()}")
+                        add_stock("A股", code, name)
+                        st.success(f"✅ 已添加 **{name}**（{code}）")
                         st.rerun()
                     else:
                         st.error("❌ 无法获取该股票数据")
+                else:
+                    st.error("❌ 未找到该股票，请检查代码")
 
     with tab_c:
         if all_crypto:
@@ -506,23 +544,22 @@ elif page == "⚙️ 自选管理":
 
         st.markdown("---")
         st.markdown("**➕ 添加加密货币**")
-        c1, c2, c3 = st.columns([2, 2, 1])
-        with c1:
-            new_c_code = st.text_input("交易对", placeholder="如 LINK/USDT", key="new_c_code")
-        with c2:
-            new_c_name = st.text_input("名称", placeholder="如 ChainLink", key="new_c_name")
-        with c3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ 添加", key="add_c"):
-                if new_c_code.strip() and new_c_name.strip():
-                    with st.spinner("验证数据..."):
-                        df = fetch_crypto(new_c_code.strip(), 30)
+        new_c_code = st.text_input("输入交易对", placeholder="如 LINK/USDT", key="new_c_code")
+        if st.button("➕ 添加", key="add_c"):
+            if new_c_code.strip():
+                code = new_c_code.strip()
+                with st.spinner("查询中..."):
+                    name = lookup_stock_name(code)
+                if name:
+                    df = fetch_crypto(code, 30)
                     if df is not None and len(df) >= 30:
-                        add_stock("加密货币", new_c_code.strip(), new_c_name.strip())
-                        st.success(f"✅ 已添加 {new_c_name.strip()}")
+                        add_stock("加密货币", code, name)
+                        st.success(f"✅ 已添加 **{name}**（{code}）")
                         st.rerun()
                     else:
                         st.error("❌ 无法获取该交易对数据")
+                else:
+                    st.error("❌ 未找到该交易对，请检查格式（如 LINK/USDT）")
 
     # 恢复默认
     st.markdown("---")
