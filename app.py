@@ -7,7 +7,6 @@
 import os
 import sys
 import json
-import threading
 from datetime import datetime
 
 import streamlit as st
@@ -81,58 +80,73 @@ STRATEGY_INFO = {
 label_map = {k: v["weight_key"] for k, v in STRATEGY_INFO.items()}
 
 # ============================================================
-#  后台扫描状态管理（模块级，跨rerun持久）
+#  前台扫描（并发 + 实时进度）
 # ============================================================
-_scan_state = {
-    "is_scanning": False,
-    "total": 0,
-    "completed": 0,
-    "last_stock": "",
-    "error": None,
-}
-
 AUTO_SCAN_INTERVAL = 30 * 60  # 30分钟自动扫描
 
 
-def _on_scan_progress(completed, total, symbol, name):
-    _scan_state["completed"] = completed
-    _scan_state["total"] = total
-    _scan_state["last_stock"] = f"{name}（{symbol}）"
-
-
-def _run_bg_scan(market_type, all_a, all_crypto):
-    _scan_state["is_scanning"] = True
-    _scan_state["total"] = 0
-    _scan_state["completed"] = 0
-    _scan_state["last_stock"] = "准备中..."
-    _scan_state["error"] = None
-
+def run_scan_with_progress(market_type="all"):
+    """前台并发扫描，实时显示进度"""
     import config as cfg_mod
+    all_a, all_crypto = get_all_stocks()
     orig_a, orig_c = cfg_mod.A_STOCKS, cfg_mod.CRYPTO
     cfg_mod.A_STOCKS, cfg_mod.CRYPTO = all_a, all_crypto
 
-    try:
-        results = scan_market(market_type, on_progress=_on_scan_progress)
-        st.session_state["scan_results"] = results
-        st.session_state["scan_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    except Exception as e:
-        _scan_state["error"] = str(e)
-    finally:
-        _scan_state["is_scanning"] = False
-        cfg_mod.A_STOCKS, cfg_mod.CRYPTO = orig_a, orig_c
+    # 先统计总数
+    tasks = []
+    if market_type in ("all", "a_stock"):
+        for sym, name in all_a.items():
+            tasks.append((sym, name, "A股"))
+    if market_type in ("all", "crypto"):
+        for sym, name in all_crypto.items():
+            tasks.append((sym, name, "加密货币"))
+
+    total = len(tasks)
+    progress_bar = st.progress(0, text=f"准备扫描 {total} 个标的...")
+    results = []
+    completed = 0
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {}
+        for sym, name, market in tasks:
+            f = pool.submit(_fetch_and_scan_one, sym, name, market)
+            futures[f] = (sym, name, market)
+
+        for f in as_completed(futures):
+            sym, name, market = futures[f]
+            completed += 1
+            try:
+                r = f.result(timeout=60)
+                if r:
+                    results.append(r)
+            except Exception:
+                pass
+            pct = completed / total
+            progress_bar.progress(pct, text=f"扫描: {name}（{sym}） | {completed}/{total}")
+
+    progress_bar.empty()
+    cfg_mod.A_STOCKS, cfg_mod.CRYPTO = orig_a, orig_c
+
+    st.session_state["scan_results"] = results
+    st.session_state["scan_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return results
 
 
-def start_bg_scan(market_type="all"):
-    if _scan_state["is_scanning"]:
-        return
-    all_a, all_crypto = get_all_stocks()
-    thread = threading.Thread(target=_run_bg_scan, args=(market_type, all_a, all_crypto), daemon=True)
-    thread.start()
+def _fetch_and_scan_one(sym, name, market):
+    """单个标的：拉数据 + 扫描"""
+    from config import STRATEGY_PARAMS, STRATEGY_WEIGHTS, LOOKBACK_DAYS
+    fetch_fn = fetch_crypto if market == "加密货币" else fetch_a_stock
+    df = fetch_fn(sym, LOOKBACK_DAYS)
+    if df is None or len(df) < 30:
+        return None
+    from scanner import _scan_one
+    return _scan_one(df, name, sym, market, STRATEGY_PARAMS, STRATEGY_WEIGHTS)
 
 
 def should_auto_scan():
-    if _scan_state["is_scanning"]:
-        return False
+    """判断是否该自动扫描"""
     last = st.session_state.get("scan_time")
     if not last:
         return True
@@ -241,26 +255,21 @@ col_logo, col_status, col_btn = st.columns([2, 3, 1])
 with col_logo:
     st.markdown("### 🐸 量化信号扫描")
 with col_status:
-    if _scan_state["is_scanning"]:
-        pct = _scan_state["completed"] / max(_scan_state["total"], 1)
-        st.progress(pct)
-        st.caption(f"🔍 {_scan_state['last_stock']} | {_scan_state['completed']}/{_scan_state['total']}")
-    else:
-        last_t = st.session_state.get("scan_time", "未扫描")
-        st.caption(f"⏰ 上次扫描: {last_t}")
+    last_t = st.session_state.get("scan_time", "未扫描")
+    st.caption(f"⏰ 上次扫描: {last_t}")
 with col_btn:
     if st.button("🔄 扫描", type="primary", use_container_width=True):
-        start_bg_scan("all")
+        st.session_state["trigger_scan"] = True
 
 # 顶部选项卡
 tab_names = ["📊 信号总览", "📈 个股分析", "💼 模拟交易", "⚙️ 自选管理", "🎛️ 策略设置"]
 tabs = st.tabs(tab_names)
 
-# 自动扫描：仅首次打开页面触发
+# 自动扫描：仅首次打开页面且超30分钟触发
 if "first_visit" not in st.session_state:
     st.session_state["first_visit"] = True
     if should_auto_scan():
-        start_bg_scan("all")
+        st.session_state["trigger_scan"] = True
 
 
 # ============================================================
@@ -329,17 +338,18 @@ def fetch_price(code, is_crypto=False):
 #  Tab 1: 信号总览（紧凑表格 + 排序 + 展开）
 # ============================================================
 with tabs[0]:
-    # 扫描进行中：提示手动刷新
-    if _scan_state["is_scanning"]:
-        st.info(f"🔍 扫描中: {_scan_state['last_stock']} | {_scan_state['completed']}/{_scan_state['total']} — 刷新页面查看进度")
-
     results = st.session_state.get("scan_results", [])
     scan_time = st.session_state.get("scan_time", "未扫描")
+
+    # 触发扫描
+    if st.session_state.get("trigger_scan", False):
+        st.session_state["trigger_scan"] = False
+        results = run_scan_with_progress("all")
 
     # 读取当前权重
     weights = st.session_state.get("custom_weights", dict(STRATEGY_WEIGHTS))
 
-    if results and not _scan_state["is_scanning"]:
+    if results:
         for r in results:
             r["score"] = compute_score(r.get("signals", {}), weights)
 
@@ -461,20 +471,7 @@ with tabs[0]:
                     brief = " | ".join([f"{STRATEGY_INFO.get(k,{}).get('name',k)}:{v}" for k, v in r["details"].items() if v != "数据不足" and v != "量能正常" and v != "动量平淡"])
                     st.write(f"**{r['name']}** `{r['symbol']}` — 评分 {r['score']} | {brief}")
 
-    elif results and _scan_state["is_scanning"]:
-        with st.expander("📋 上次扫描结果（新扫描完成后自动更新）", expanded=False):
-            st.caption(f"⏰ {scan_time}")
-            rows = []
-            for r in sorted(results, key=lambda x: x.get("score", 0), reverse=True):
-                r["score"] = compute_score(r.get("signals", {}), weights)
-                rows.append({
-                    "信号": f"{signal_emoji(r['score'])}",
-                    "名称": r["name"], "代码": r["symbol"],
-                    "市场": r["market"], "评分": r["score"], "现价": round(r["price"], 3),
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    elif not _scan_state["is_scanning"]:
+    elif not results:
         st.info("👆 点击右上角「扫描」按钮开始扫描")
 
 
