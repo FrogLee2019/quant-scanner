@@ -256,9 +256,11 @@ with col_btn:
 tab_names = ["📊 信号总览", "📈 个股分析", "💼 模拟交易", "⚙️ 自选管理", "🎛️ 策略设置"]
 tabs = st.tabs(tab_names)
 
-# 自动扫描检查
-if should_auto_scan():
-    start_bg_scan("all")
+# 自动扫描：仅首次打开页面触发
+if "first_visit" not in st.session_state:
+    st.session_state["first_visit"] = True
+    if should_auto_scan():
+        start_bg_scan("all")
 
 
 # ============================================================
@@ -327,10 +329,9 @@ def fetch_price(code, is_crypto=False):
 #  Tab 1: 信号总览（紧凑表格 + 排序 + 展开）
 # ============================================================
 with tabs[0]:
-    # 扫描进行中：定时刷新
+    # 扫描进行中：提示手动刷新
     if _scan_state["is_scanning"]:
-        # 用meta标签实现自动刷新（5秒），纯HTML不需要额外包
-        st.markdown('<meta http-equiv="refresh" content="5">', unsafe_allow_html=True)
+        st.info(f"🔍 扫描中: {_scan_state['last_stock']} | {_scan_state['completed']}/{_scan_state['total']} — 刷新页面查看进度")
 
     results = st.session_state.get("scan_results", [])
     scan_time = st.session_state.get("scan_time", "未扫描")
