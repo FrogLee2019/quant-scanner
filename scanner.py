@@ -305,7 +305,7 @@ def _scan_one(df, name, symbol, market, params, weights):
         "market": market, "symbol": symbol, "name": name,
         "price": price, "stop_loss": stop, "score": score,
         "signal": f"{signal_emoji(score)} {signal_label(score)}",
-        "details": details,
+        "signals": signals, "details": details,
     }
 
 

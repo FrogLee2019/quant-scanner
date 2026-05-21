@@ -194,7 +194,7 @@ if page == "📊 信号总览":
 
     if results:
         for r in results:
-            r["score"] = compute_score({k: v for k, v in r.get("details", {}).items()}, weights)
+            r["score"] = compute_score(r.get("signals", {}), weights)
             r["signal"] = f"{signal_emoji(r['score'])} {signal_label(r['score'])}"
 
         ranked = sorted(results, key=lambda x: x["score"], reverse=True)
