@@ -111,14 +111,14 @@ def run_scan_with_progress(market_type="all"):
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {}
         for sym, name, market in tasks:
-            f = pool.submit(_fetch_and_scan_one, sym, name, market)
+            f = pool.submit(_fetch_and_scan_one, sym, name, market, timeout=20)
             futures[f] = (sym, name, market)
 
         for f in as_completed(futures):
             sym, name, market = futures[f]
             completed += 1
             try:
-                r = f.result(timeout=60)
+                r = f.result(timeout=25)
                 if r:
                     results.append(r)
             except Exception:
@@ -134,15 +134,49 @@ def run_scan_with_progress(market_type="all"):
     return results
 
 
-def _fetch_and_scan_one(sym, name, market):
-    """单个标的：拉数据 + 扫描"""
+def _fetch_and_scan_one(sym, name, market, timeout=20):
+    """单个标的：拉数据 + 扫描，超时则跳过"""
     from config import STRATEGY_PARAMS, STRATEGY_WEIGHTS, LOOKBACK_DAYS
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FTimeout
     fetch_fn = fetch_crypto if market == "加密货币" else fetch_a_stock
-    df = fetch_fn(sym, LOOKBACK_DAYS)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(fetch_fn, sym, LOOKBACK_DAYS)
+        try:
+            df = fut.result(timeout=timeout)
+        except FTimeout:
+            return None
+        except Exception:
+            return None
+
     if df is None or len(df) < 30:
         return None
     from scanner import _scan_one
     return _scan_one(df, name, sym, market, STRATEGY_PARAMS, STRATEGY_WEIGHTS)
+
+
+def scan_single_stock(sym, name, market):
+    """扫描单只股票"""
+    with st.spinner(f"扫描 {name}（{sym}）..."):
+        r = _fetch_and_scan_one(sym, name, market)
+    if r:
+        weights = st.session_state.get("custom_weights", dict(STRATEGY_WEIGHTS))
+        r["score"] = compute_score(r.get("signals", {}), weights)
+        # 更新到已有结果中
+        results = st.session_state.get("scan_results", [])
+        # 替换已有或新增
+        replaced = False
+        for i, existing in enumerate(results):
+            if existing["symbol"] == sym:
+                results[i] = r
+                replaced = True
+                break
+        if not replaced:
+            results.append(r)
+        st.session_state["scan_results"] = results
+        st.success(f"{name}（{sym}）评分: {r['score']} — {signal_emoji(r['score'])} {signal_label(r['score'])}")
+    else:
+        st.warning(f"⚠️ {name}（{sym}）数据获取超时或失败，已跳过")
 
 
 def should_auto_scan():
@@ -392,7 +426,7 @@ with tabs[0]:
         c3.metric("⚪ 观望", len(ranked) - len(buy) - len(sell))
         c4.caption(f"⏰ {scan_time}")
 
-        # 主表格：紧凑、可排序、一行一标的
+        # 主表格
         table_rows = []
         for r in ranked:
             # 计算5日涨跌
@@ -432,6 +466,19 @@ with tabs[0]:
                 "止损位": st.column_config.NumberColumn(format="%.3f"),
             },
         )
+
+        # 单独扫描按钮区域
+        st.markdown("---")
+        st.markdown("**🔍 单独扫描** — 点击刷新单只股票数据")
+        scan_cols_per_row = 6
+        for i in range(0, len(ranked), scan_cols_per_row):
+            cols = st.columns(scan_cols_per_row)
+            for j, col in enumerate(cols):
+                if i + j < len(ranked):
+                    r = ranked[i + j]
+                    emoji = signal_emoji(r["score"])
+                    if col.button(f"{emoji} {r['name']}", key=f"single_scan_{r['symbol']}", use_container_width=True):
+                        scan_single_stock(r["symbol"], r["name"], r["market"])
 
         # 展开详情
         st.markdown("---")
