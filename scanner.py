@@ -1,12 +1,13 @@
 """
 🐸 多策略量化信号扫描工具
 支持 A股 + 加密货币
-策略：均线交叉、RSI、布林带、MACD、成交量异动、动量
+策略：均线交叉、RSI、布林带、MACD、成交量异动、动量、历史位置
 """
 
 import os
 import sys
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -309,7 +310,17 @@ def _scan_one(df, name, symbol, market, params, weights):
     }
 
 
-def scan_market(market_type="all"):
+def _fetch_and_scan(sym, name, market, params, weights, lookback):
+    """单个标的：拉数据 + 扫描，供并发调用"""
+    fetch_fn = fetch_crypto if market == "加密货币" else fetch_a_stock
+    df = fetch_fn(sym, lookback)
+    if df is None or len(df) < 30:
+        return None
+    return _scan_one(df, name, sym, market, params, weights)
+
+
+def scan_market(market_type="all", max_workers=8):
+    """并发扫描市场，max_workers 控制并发数"""
     from config import A_STOCKS, CRYPTO, STRATEGY_PARAMS, STRATEGY_WEIGHTS, LOOKBACK_DAYS
     # 加载自定义标的
     custom_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "custom_stocks.json")
@@ -324,30 +335,108 @@ def scan_market(market_type="all"):
         all_crypto = CRYPTO
     results = []
 
+    # 构建任务列表
+    tasks = []
     if market_type in ("all", "a_stock"):
-        print(f"\n{'='*50}\n扫描A股 {len(all_a)} 只标的...\n{'='*50}")
         for sym, name in all_a.items():
-            print(f"  {name}({sym})...", end=" ", flush=True)
-            df = fetch_a_stock(sym, LOOKBACK_DAYS)
-            if df is None or len(df) < 30:
-                print("跳过(数据不足)")
-                continue
-            r = _scan_one(df, name, sym, "A股", STRATEGY_PARAMS, STRATEGY_WEIGHTS)
-            print(f"评分 {r['score']}")
-            results.append(r)
-
+            tasks.append((sym, name, "A股"))
     if market_type in ("all", "crypto"):
-        print(f"\n{'='*50}\n扫描加密货币 {len(all_crypto)} 个标的...\n{'='*50}")
         for sym, name in all_crypto.items():
-            print(f"  {name}({sym})...", end=" ", flush=True)
-            df = fetch_crypto(sym, LOOKBACK_DAYS)
-            if df is None or len(df) < 30:
-                print("跳过(数据不足)")
-                continue
-            r = _scan_one(df, name, sym, "加密货币", STRATEGY_PARAMS, STRATEGY_WEIGHTS)
-            print(f"评分 {r['score']}")
-            results.append(r)
+            tasks.append((sym, name, "加密货币"))
 
+    print(f"\n{'='*50}\n并发扫描 {len(tasks)} 个标的（{max_workers}线程）...\n{'='*50}")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for sym, name, market in tasks:
+            f = pool.submit(_fetch_and_scan, sym, name, market, STRATEGY_PARAMS, STRATEGY_WEIGHTS, LOOKBACK_DAYS)
+            futures[f] = (sym, name, market)
+
+        for f in as_completed(futures):
+            sym, name, market = futures[f]
+            try:
+                r = f.result(timeout=60)
+                if r:
+                    print(f"  ✅ {name}({sym}) 评分 {r['score']}")
+                    results.append(r)
+                else:
+                    print(f"  ⏭️ {name}({sym}) 跳过(数据不足)")
+            except Exception as e:
+                print(f"  ❌ {name}({sym}) 异常: {e}")
+
+    return results
+
+
+# ============================================================
+#  股票搜索
+# ============================================================
+
+def search_a_stock(keyword, limit=20):
+    """按代码或名称模糊搜索A股，返回 [{code, name}]"""
+    import baostock as bs
+    import io, contextlib
+    keyword = keyword.strip()
+    if not keyword:
+        return []
+
+    results = []
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            bs.login()
+        rs = bs.query_stock_basic()
+        while (rs.error_code == "0") and rs.next():
+            row = rs.get_row_data()
+            code_raw = row[0]  # sh.600519 或 sz.000001
+            name = row[1] if len(row) > 1 else ""
+            # 去掉 sh./sz. 前缀
+            code = code_raw.split(".")[-1] if "." in code_raw else code_raw
+            # 模糊匹配：代码包含关键词 或 名称包含关键词
+            if keyword in code or keyword in name:
+                results.append({"code": code, "name": name, "full_code": code_raw})
+            if len(results) >= limit:
+                break
+        with contextlib.redirect_stdout(io.StringIO()):
+            bs.logout()
+    except Exception:
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                bs.logout()
+        except Exception:
+            pass
+    return results
+
+
+# 常见加密货币映射（用于搜索）
+CRYPTO_NAME_MAP = {
+    "BTC/USDT": "比特币", "ETH/USDT": "以太坊", "SOL/USDT": "Solana",
+    "BNB/USDT": "币安币", "XRP/USDT": "瑞波币", "ADA/USDT": "艾达币",
+    "DOGE/USDT": "狗狗币", "AVAX/USDT": "雪崩", "DOT/USDT": "波卡",
+    "LINK/USDT": "ChainLink", "MATIC/USDT": "Polygon", "SHIB/USDT": "柴犬币",
+    "UNI/USDT": "Uniswap", "LTC/USDT": "莱特币", "ATOM/USDT": "Cosmos",
+    "FIL/USDT": "Filecoin", "APT/USDT": "Aptos", "ARB/USDT": "Arbitrum",
+    "OP/USDT": "Optimism", "NEAR/USDT": "NEAR", "SUI/USDT": "Sui",
+    "TIA/USDT": "Celestia", "SEI/USDT": "Sei", "INJ/USDT": "Injective",
+    "FET/USDT": "Fetch.ai", "PEPE/USDT": "Pepe", "WIF/USDT": "dogwifhat",
+    "FLOKI/USDT": "FLOKI", "TRX/USDT": "波场", "ETC/USDT": "以太经典",
+    "BCH/USDT": "比特币现金", "ALGO/USDT": "Algorand", "VET/USDT": "VeChain",
+    "ICP/USDT": "互联网计算机", "HBAR/USDT": "Hedera", "SAND/USDT": "Sandbox",
+    "MANA/USDT": "Decentraland", "AAVE/USDT": "Aave", "MKR/USDT": "Maker",
+}
+
+
+def search_crypto(keyword, limit=20):
+    """按代码或名称模糊搜索加密货币，返回 [{code, name}]"""
+    keyword = keyword.strip().upper()
+    if not keyword:
+        return []
+    results = []
+    for pair, name in CRYPTO_NAME_MAP.items():
+        # 匹配：币种符号 或 中文名
+        base = pair.split("/")[0]  # BTC, ETH等
+        if keyword in base or keyword in pair.upper() or keyword in name.upper():
+            results.append({"code": pair, "name": name})
+        if len(results) >= limit:
+            break
     return results
 
 

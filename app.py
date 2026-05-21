@@ -21,6 +21,7 @@ from scanner import (
     fetch_a_stock, fetch_crypto,
     STRATEGIES, compute_score, signal_emoji, signal_label,
     scan_market, generate_report,
+    search_a_stock, search_crypto, CRYPTO_NAME_MAP,
 )
 from config import A_STOCKS, CRYPTO, STRATEGY_PARAMS, STRATEGY_WEIGHTS
 from portfolio import (
@@ -263,7 +264,7 @@ if page == "📊 信号总览":
         orig_a, orig_c = cfg_mod.A_STOCKS, cfg_mod.CRYPTO
         cfg_mod.A_STOCKS, cfg_mod.CRYPTO = all_a, all_crypto
 
-        with st.spinner("🔍 扫描中，首次可能需要1-2分钟..."):
+        with st.spinner("🔍 并发扫描中，速度已优化..."):
             results = scan_market(market_arg)
             st.session_state["scan_results"] = results
             st.session_state["scan_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -477,7 +478,7 @@ elif page == "💼 模拟交易":
 # ============================================================
 elif page == "⚙️ 自选管理":
     st.header("⚙️ 自选管理")
-    st.caption("管理你的自选标的列表，移除不想看的、添加想关注的")
+    st.caption("搜索添加你关注的标的，移除不想看的")
 
     all_a, all_crypto = get_all_stocks()
 
@@ -505,24 +506,44 @@ elif page == "⚙️ 自选管理":
             st.info("暂无A股自选")
 
         st.markdown("---")
-        st.markdown("**➕ 添加A股**")
-        new_a_code = st.text_input("输入股票代码", placeholder="如 002226", key="new_a_code")
-        if st.button("➕ 添加", key="add_a"):
-            if new_a_code.strip():
-                code = new_a_code.strip()
-                with st.spinner("查询中..."):
-                    name = lookup_stock_name(code)
-                if name:
-                    # 验证数据可用
-                    df = fetch_a_stock(code, 30)
-                    if df is not None and len(df) >= 30:
-                        add_stock("A股", code, name)
-                        st.success(f"✅ 已添加 **{name}**（{code}）")
-                        st.rerun()
-                    else:
-                        st.error("❌ 无法获取该股票数据")
+        st.markdown("**➕ 搜索添加A股**")
+        a_keyword = st.text_input("输入股票代码或名称", placeholder="如 002226 或 江南", key="a_search_kw")
+        if st.button("🔍 搜索A股", key="a_search_btn"):
+            if a_keyword.strip():
+                with st.spinner("搜索中..."):
+                    search_results = search_a_stock(a_keyword.strip())
+                if search_results:
+                    st.session_state["a_search_results"] = search_results
                 else:
-                    st.error("❌ 未找到该股票，请检查代码")
+                    st.warning("未找到匹配的股票")
+                    st.session_state.pop("a_search_results", None)
+
+        # 展示搜索结果
+        if "a_search_results" in st.session_state and st.session_state["a_search_results"]:
+            st.markdown("**搜索结果：**")
+            for item in st.session_state["a_search_results"]:
+                c = item["code"]
+                n = item["name"]
+                already = c in all_a
+                col_info, col_btn = st.columns([4, 1])
+                with col_info:
+                    tag = " ✅已添加" if already else ""
+                    st.markdown(f"**{n}** `{c}`{tag}")
+                with col_btn:
+                    if already:
+                        st.markdown("已存在")
+                    else:
+                        if st.button("添加", key=f"add_a_{c}"):
+                            # 验证数据可用
+                            with st.spinner(f"验证 {n} 数据..."):
+                                df = fetch_a_stock(c, 30)
+                            if df is not None and len(df) >= 30:
+                                add_stock("A股", c, n)
+                                st.success(f"✅ 已添加 **{n}**（{c}）")
+                                st.session_state.pop("a_search_results", None)
+                                st.rerun()
+                            else:
+                                st.error("❌ 无法获取该股票数据")
 
     with tab_c:
         if all_crypto:
@@ -543,23 +564,42 @@ elif page == "⚙️ 自选管理":
             st.info("暂无加密货币自选")
 
         st.markdown("---")
-        st.markdown("**➕ 添加加密货币**")
-        new_c_code = st.text_input("输入交易对", placeholder="如 LINK/USDT", key="new_c_code")
-        if st.button("➕ 添加", key="add_c"):
-            if new_c_code.strip():
-                code = new_c_code.strip()
-                with st.spinner("查询中..."):
-                    name = lookup_stock_name(code)
-                if name:
-                    df = fetch_crypto(code, 30)
-                    if df is not None and len(df) >= 30:
-                        add_stock("加密货币", code, name)
-                        st.success(f"✅ 已添加 **{name}**（{code}）")
-                        st.rerun()
-                    else:
-                        st.error("❌ 无法获取该交易对数据")
+        st.markdown("**➕ 搜索添加加密货币**")
+        c_keyword = st.text_input("输入币种符号或名称", placeholder="如 BTC 或 比特币", key="c_search_kw")
+        if st.button("🔍 搜索加密货币", key="c_search_btn"):
+            if c_keyword.strip():
+                search_results = search_crypto(c_keyword.strip())
+                if search_results:
+                    st.session_state["c_search_results"] = search_results
                 else:
-                    st.error("❌ 未找到该交易对，请检查格式（如 LINK/USDT）")
+                    st.warning("未找到匹配的币种")
+                    st.session_state.pop("c_search_results", None)
+
+        # 展示搜索结果
+        if "c_search_results" in st.session_state and st.session_state["c_search_results"]:
+            st.markdown("**搜索结果：**")
+            for item in st.session_state["c_search_results"]:
+                c = item["code"]
+                n = item["name"]
+                already = c in all_crypto
+                col_info, col_btn = st.columns([4, 1])
+                with col_info:
+                    tag = " ✅已添加" if already else ""
+                    st.markdown(f"**{n}** `{c}`{tag}")
+                with col_btn:
+                    if already:
+                        st.markdown("已存在")
+                    else:
+                        if st.button("添加", key=f"add_c_{c.replace('/', '_')}"):
+                            with st.spinner(f"验证 {n} 数据..."):
+                                df = fetch_crypto(c, 30)
+                            if df is not None and len(df) >= 30:
+                                add_stock("加密货币", c, n)
+                                st.success(f"✅ 已添加 **{n}**（{c}）")
+                                st.session_state.pop("c_search_results", None)
+                                st.rerun()
+                            else:
+                                st.error("❌ 无法获取该交易对数据")
 
     # 恢复默认
     st.markdown("---")
