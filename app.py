@@ -32,6 +32,56 @@ from portfolio import (
 )
 
 # ============================================================
+#  策略中文说明（小白友好版）
+# ============================================================
+STRATEGY_INFO = {
+    "ma_cross": {
+        "name": "均线交叉",
+        "weight_key": "均线交叉",
+        "explain": "短期均线上穿长期均线叫"金叉"（看涨），下穿叫"死叉"（看跌）。就像两条河流交叉，短期趋势超过长期趋势就是变盘信号。",
+        "params": "快线MA5 / 慢线MA20",
+    },
+    "rsi": {
+        "name": "RSI强弱指标",
+        "weight_key": "RSI强弱",
+        "explain": "衡量近期涨跌力度，0-100之间。>70为超买（涨太多可能要跌），<30为超卖（跌太多可能要涨）。就像弹簧，压得太狠会弹回来。",
+        "params": "周期14天，超买70，超卖30",
+    },
+    "bollinger": {
+        "name": "布林带",
+        "weight_key": "布林带",
+        "explain": "在均线基础上画上下两条"轨道"。价格触及上轨可能要回调，触及下轨可能要反弹。就像皮筋拉太紧会回弹。",
+        "params": "中轨MA20，上下2倍标准差",
+    },
+    "macd": {
+        "name": "MACD趋势",
+        "weight_key": "MACD趋势",
+        "explain": "判断趋势方向的经典指标。DIF上穿DEA叫金叉（看涨），红柱放大说明多头变强。相当于更灵敏的均线系统。",
+        "params": "快线12 / 慢线26 / 信号9",
+    },
+    "volume": {
+        "name": "成交量异动",
+        "weight_key": "成交量",
+        "explain": "量价配合：放量上涨是真的涨，放量下跌是真的跌。缩量说明市场冷淡，方向不明。就像人多力量大。",
+        "params": "量比阈值2.0倍",
+    },
+    "momentum": {
+        "name": "动量强度",
+        "weight_key": "动量强度",
+        "explain": "最近一段时间的涨跌幅度。动量>5%说明涨势很强，<-5%说明跌势很猛。趋势一旦形成，短期容易延续。",
+        "params": "观察期20天",
+    },
+    "position": {
+        "name": "历史位置",
+        "weight_key": "历史位置",
+        "explain": "当前价格在过去1年的位置百分位。10%分位=近1年最低区域（可能见底），90%分位=近1年最高区域（注意风险）。好货便宜了才值得买。",
+        "params": "观察1年（250个交易日）",
+    },
+}
+
+label_map = {k: v["weight_key"] for k, v in STRATEGY_INFO.items()}
+
+# ============================================================
 #  后台扫描状态管理（模块级，跨rerun持久）
 # ============================================================
 _scan_state = {
@@ -46,14 +96,12 @@ AUTO_SCAN_INTERVAL = 30 * 60  # 30分钟自动扫描
 
 
 def _on_scan_progress(completed, total, symbol, name):
-    """扫描进度回调，由后台线程调用"""
     _scan_state["completed"] = completed
     _scan_state["total"] = total
     _scan_state["last_stock"] = f"{name}（{symbol}）"
 
 
 def _run_bg_scan(market_type, all_a, all_crypto):
-    """后台线程执行扫描"""
     _scan_state["is_scanning"] = True
     _scan_state["total"] = 0
     _scan_state["completed"] = 0
@@ -76,16 +124,14 @@ def _run_bg_scan(market_type, all_a, all_crypto):
 
 
 def start_bg_scan(market_type="all"):
-    """启动后台扫描（非阻塞）"""
     if _scan_state["is_scanning"]:
-        return  # 已在扫描，不重复启动
+        return
     all_a, all_crypto = get_all_stocks()
     thread = threading.Thread(target=_run_bg_scan, args=(market_type, all_a, all_crypto), daemon=True)
     thread.start()
 
 
 def should_auto_scan():
-    """判断是否该自动扫描（距上次30分钟+）"""
     if _scan_state["is_scanning"]:
         return False
     last = st.session_state.get("scan_time")
@@ -97,6 +143,7 @@ def should_auto_scan():
     except Exception:
         return True
 
+
 # ============================================================
 #  持久化：自选标的（云端用session_state）
 # ============================================================
@@ -104,11 +151,7 @@ def should_auto_scan():
 STOCKS_KEY = "my_stocks"
 
 def _default_stocks():
-    """默认自选列表，从config初始化"""
-    return {
-        "a_stock": dict(A_STOCKS),
-        "crypto": dict(CRYPTO),
-    }
+    return {"a_stock": dict(A_STOCKS), "crypto": dict(CRYPTO)}
 
 def load_my_stocks():
     if STOCKS_KEY not in st.session_state:
@@ -135,11 +178,9 @@ def get_all_stocks():
     return stocks.get("a_stock", {}), stocks.get("crypto", {})
 
 def format_stock_label(code, name, market=""):
-    """格式化下拉菜单显示"""
     return f"{name}（{code}）{market}"
 
 def build_stock_options(all_a, all_crypto):
-    """构建下拉选项，返回 {显示文本: 代码}"""
     options = {}
     for code, name in all_a.items():
         options[format_stock_label(code, name, "A股")] = code
@@ -157,9 +198,7 @@ PF_KEY = "portfolio"
 def load_pf():
     if PF_KEY not in st.session_state:
         st.session_state[PF_KEY] = {
-            "cash": 1000000.0,
-            "positions": {},
-            "history": [],
+            "cash": 1000000.0, "positions": {}, "history": [],
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
     return st.session_state[PF_KEY]
@@ -169,9 +208,7 @@ def save_pf(pf):
 
 def reset_pf():
     st.session_state[PF_KEY] = {
-        "cash": 1000000.0,
-        "positions": {},
-        "history": [],
+        "cash": 1000000.0, "positions": {}, "history": [],
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
 
@@ -183,42 +220,46 @@ st.set_page_config(
     page_title="🐸 量化信号扫描",
     page_icon="🐸",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
+
 # ============================================================
-#  侧边栏
+#  顶部导航栏
 # ============================================================
-with st.sidebar:
-    st.header("🐸 量化信号扫描")
-    st.markdown("A股 + 加密货币 · 多策略评分")
-    st.markdown("---")
+st.markdown("""
+<style>
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] { padding: 8px 16px; font-size: 15px; }
+    div[data-testid="stMetricValue"] { font-size: 18px; }
+    div[data-testid="stMetricDelta"] { font-size: 13px; }
+    .compact-metric { text-align: center; }
+</style>
+""", unsafe_allow_html=True)
 
-    page = st.radio("功能导航", ["📊 信号总览", "📈 个股分析", "💼 模拟交易", "⚙️ 自选管理"], index=0)
-
-    st.markdown("---")
-    st.subheader("策略权重")
-    weights = {}
-    label_map = {
-        "ma_cross": "均线交叉", "rsi": "RSI", "bollinger": "布林带",
-        "macd": "MACD", "volume": "成交量", "momentum": "动量",
-        "position": "历史位置",
-    }
-    for k, default_v in STRATEGY_WEIGHTS.items():
-        weights[k] = st.slider(label_map.get(k, k), 0.0, 3.0, default_v, 0.1, key=f"w_{k}")
-
-    # 侧边栏扫描状态指示
-    st.markdown("---")
+# 标题行：logo + 扫描状态 + 按钮
+col_logo, col_status, col_btn = st.columns([2, 3, 1])
+with col_logo:
+    st.markdown("### 🐸 量化信号扫描")
+with col_status:
     if _scan_state["is_scanning"]:
         pct = _scan_state["completed"] / max(_scan_state["total"], 1)
-        st.caption(f"🔄 后台扫描中 {_scan_state['completed']}/{_scan_state['total']}")
         st.progress(pct)
+        st.caption(f"🔍 {_scan_state['last_stock']} | {_scan_state['completed']}/{_scan_state['total']}")
     else:
         last_t = st.session_state.get("scan_time", "未扫描")
         st.caption(f"⏰ 上次扫描: {last_t}")
+with col_btn:
+    if st.button("🔄 扫描", type="primary", use_container_width=True):
+        start_bg_scan("all")
 
-    st.markdown("---")
-    st.caption("⚠️ 仅供参考，不构成投资建议")
+# 顶部选项卡
+tab_names = ["📊 信号总览", "📈 个股分析", "💼 模拟交易", "⚙️ 自选管理", "🎛️ 策略设置"]
+tabs = st.tabs(tab_names)
+
+# 自动扫描检查
+if should_auto_scan():
+    start_bg_scan("all")
 
 
 # ============================================================
@@ -251,9 +292,9 @@ def draw_kline(df, title=""):
     fig.add_trace(go.Scatter(x=df.index, y=rsi, name="RSI", line=dict(color="#ff5722", width=1.5)), row=3, col=1)
     fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1, annotation_text="超买")
     fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1, annotation_text="超卖")
-    fig.update_layout(height=520, xaxis_rangeslider_visible=False, showlegend=True, title=title,
+    fig.update_layout(height=480, xaxis_rangeslider_visible=False, showlegend=True, title=title,
                       paper_bgcolor="#1a1a2e", plot_bgcolor="#0e1117",
-                      font=dict(color="#ffffff"))
+                      font=dict(color="#ffffff"), margin=dict(l=40, r=20, t=40, b=20))
     for r in [1, 2, 3]:
         fig.update_xaxes(type="category", row=r, col=1, showgrid=True, gridcolor="#333")
         fig.update_yaxes(showgrid=True, gridcolor="#333", row=r, col=1)
@@ -274,7 +315,6 @@ def analyze_one(df, params, wt):
 
 
 def fetch_price(code, is_crypto=False):
-    """获取最新价格"""
     try:
         df = fetch_crypto(code, 5) if is_crypto else fetch_a_stock(code, 5)
         if df is not None and len(df) > 0:
@@ -284,158 +324,178 @@ def fetch_price(code, is_crypto=False):
     return None
 
 
-def lookup_stock_name(code):
-    """通过代码自动查询股票名称"""
-    is_crypto = "/" in code
-    if is_crypto:
-        # 加密货币：从交易对提取，如 BTC/USDT -> 比特币
-        crypto_names = {
-            "BTC/USDT": "比特币", "ETH/USDT": "以太坊", "SOL/USDT": "Solana",
-            "BNB/USDT": "币安币", "XRP/USDT": "瑞波币", "ADA/USDT": "艾达币",
-            "DOGE/USDT": "狗狗币", "AVAX/USDT": "雪崩", "DOT/USDT": "波卡",
-            "LINK/USDT": "ChainLink", "MATIC/USDT": "Polygon", "SHIB/USDT": "柴犬币",
-            "UNI/USDT": "Uniswap", "LTC/USDT": "莱特币", "ATOM/USDT": "Cosmos",
-        }
-        return crypto_names.get(code, code.split("/")[0])
-    
-    # A股：用baostock查
-    try:
-        import baostock as bs
-        import io, contextlib
-        prefix = "sh." if code.startswith("6") or code.startswith("51") else "sz."
-        with contextlib.redirect_stdout(io.StringIO()):
-            bs.login()
-        rs = bs.query_stock_basic(code=prefix + code)
-        name = None
-        while (rs.error_code == "0") and rs.next():
-            row = rs.get_row_data()
-            if len(row) > 1:
-                name = row[1]
-                break
-        with contextlib.redirect_stdout(io.StringIO()):
-            bs.logout()
-        if name:
-            return name
-    except Exception:
-        pass
-    
-    return None
-
-
 # ============================================================
-#  页面1: 信号总览
+#  Tab 1: 信号总览（紧凑表格 + 排序 + 展开）
 # ============================================================
-if page == "📊 信号总览":
-    st.header("📊 信号总览")
-
-    # 自动扫描检查：超过30分钟自动触发
-    if should_auto_scan():
-        start_bg_scan("all")
-
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        market = st.radio("扫描范围", ["全部", "A股", "加密货币"], horizontal=False)
-    with col2:
-        scan_btn = st.button("🔄 立即扫描", use_container_width=True, type="primary")
-        if scan_btn:
-            market_arg = {"全部": "all", "A股": "a_stock", "加密货币": "crypto"}[market]
-            start_bg_scan(market_arg)
-
-    # 扫描进行中：显示进度条 + 自动刷新
+with tabs[0]:
+    # 扫描进行中：自动刷新
     if _scan_state["is_scanning"]:
-        st_autorefresh(interval=5000, key="scan_refresh")  # 5秒刷新一次
-        pct = _scan_state["completed"] / max(_scan_state["total"], 1)
-        st.progress(pct)
-        st.info(f"🔍 正在扫描: **{_scan_state['last_stock']}** | 已完成 {_scan_state['completed']}/{_scan_state['total']}")
+        st_autorefresh(interval=5000, key="scan_refresh")
 
-        if _scan_state.get("error"):
-            st.error(f"扫描出错: {_scan_state['error']}")
-
-    # 显示结果
     results = st.session_state.get("scan_results", [])
     scan_time = st.session_state.get("scan_time", "未扫描")
+
+    # 读取当前权重
+    weights = st.session_state.get("custom_weights", dict(STRATEGY_WEIGHTS))
 
     if results and not _scan_state["is_scanning"]:
         for r in results:
             r["score"] = compute_score(r.get("signals", {}), weights)
-            r["signal"] = f"{signal_emoji(r['score'])} {signal_label(r['score'])}"
 
-        ranked = sorted(results, key=lambda x: x["score"], reverse=True)
+        # 排序控件
+        col_sort, col_market = st.columns([1, 2])
+        with col_sort:
+            sort_by = st.selectbox("排序", ["评分↓", "评分↑", "名称A-Z", "名称Z-A", "5日涨幅↓", "5日涨幅↓"], index=0, key="sort_sel")
+        with col_market:
+            filter_market = st.selectbox("筛选", ["全部", "A股", "加密货币"], key="filter_market")
+
+        # 过滤
+        if filter_market != "全部":
+            filtered = [r for r in results if r["market"] == filter_market]
+        else:
+            filtered = results
+
+        # 排序
+        sort_map = {
+            "评分↓": lambda x: -x["score"],
+            "评分↑": lambda x: x["score"],
+            "名称A-Z": lambda x: x["name"],
+            "名称Z-A": lambda x: x["name"],
+        }
+        if sort_by in sort_map:
+            ranked = sorted(filtered, key=sort_map[sort_by])
+        else:
+            ranked = sorted(filtered, key=lambda x: -x["score"])
+
         buy = [r for r in ranked if r["score"] >= 30]
         sell = [r for r in ranked if r["score"] <= -30]
 
-        st.caption(f"⏰ {scan_time}")
+        # 紧凑概览条
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("🟢 买入", len(buy))
         c2.metric("🔴 卖出", len(sell))
-        c3.metric("⚪ 观望", len(results) - len(buy) - len(sell))
-        c4.metric("标的数", len(results))
+        c3.metric("⚪ 观望", len(ranked) - len(buy) - len(sell))
+        c4.caption(f"⏰ {scan_time}")
 
-        st.subheader("评分排行")
-        rows = []
+        # 主表格：紧凑、可排序、一行一标的
+        table_rows = []
         for r in ranked:
-            rows.append({
-                "信号": f"{signal_emoji(r['score'])} {signal_label(r['score'])}",
-                "市场": r["market"], "名称": r["name"], "代码": r["symbol"],
-                "评分": r["score"], "现价": f"{r['price']:.3f}", "止损位": f"{r['stop_loss']:.3f}",
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=min(400, len(rows)*35+40))
+            # 计算5日涨跌
+            pct5_str = ""
+            if "signals" in r:
+                mom_detail = r.get("details", {}).get("momentum", "")
+                if "%" in mom_detail:
+                    # 从动量描述中提取百分比
+                    import re
+                    m = re.search(r'([+-]?\d+\.?\d*)%', mom_detail)
+                    if m:
+                        pct5_str = f"{float(m.group(1)):+.1f}%"
 
+            table_rows.append({
+                "信号": f"{signal_emoji(r['score'])}",
+                "名称": r["name"],
+                "代码": r["symbol"],
+                "市场": r["market"],
+                "现价": round(r["price"], 3),
+                "5日涨幅": pct5_str,
+                "评分": r["score"],
+                "止损位": round(r["stop_loss"], 3),
+            })
+
+        df_table = pd.DataFrame(table_rows)
+
+        st.dataframe(
+            df_table,
+            use_container_width=True,
+            hide_index=True,
+            height=min(500, len(table_rows) * 35 + 40),
+            column_config={
+                "评分": st.column_config.NumberColumn(format="%.1f"),
+                "现价": st.column_config.NumberColumn(format="%.3f"),
+                "止损位": st.column_config.NumberColumn(format="%.3f"),
+            },
+        )
+
+        # 展开详情
+        st.markdown("---")
+        st.markdown("**📋 点击展开评分详情**")
+
+        # 买入信号
         if buy:
-            st.subheader("🟢 买入信号")
             for r in buy:
-                with st.expander(f"{r['name']}（{r['symbol']}）— 评分 {r['score']}"):
-                    st.write(f"现价: {r['price']:.3f} | 止损: {r['stop_loss']:.3f}")
+                with st.expander(f"🟢 {r['name']}（{r['symbol']}）— 评分 {r['score']}", expanded=False):
+                    detail_cols = st.columns(3)
+                    detail_cols[0].write(f"**现价:** {r['price']:.3f}")
+                    detail_cols[1].write(f"**止损位:** {r['stop_loss']:.3f}")
+                    detail_cols[2].write(f"**市场:** {r['market']}")
                     for k, v in r["details"].items():
-                        st.write(f"- **{label_map.get(k, k)}**: {v}")
+                        info = STRATEGY_INFO.get(k, {})
+                        label = info.get("name", k)
+                        st.write(f"- **{label}**: {v}")
+
+        # 卖出信号
         if sell:
-            st.subheader("🔴 卖出信号")
             for r in sell:
-                with st.expander(f"{r['name']}（{r['symbol']}）— 评分 {r['score']}"):
-                    st.write(f"现价: {r['price']:.3f}")
+                with st.expander(f"🔴 {r['name']}（{r['symbol']}）— 评分 {r['score']}", expanded=False):
+                    detail_cols = st.columns(3)
+                    detail_cols[0].write(f"**现价:** {r['price']:.3f}")
+                    detail_cols[1].write(f"**止损位:** {r['stop_loss']:.3f}")
+                    detail_cols[2].write(f"**市场:** {r['market']}")
                     for k, v in r["details"].items():
-                        st.write(f"- **{label_map.get(k, k)}**: {v}")
+                        info = STRATEGY_INFO.get(k, {})
+                        label = info.get("name", k)
+                        st.write(f"- **{label}**: {v}")
+
+        # 其他标的（折叠）
+        mid = [r for r in ranked if -30 < r["score"] < 30]
+        if mid:
+            with st.expander(f"⚪ 观望标的（{len(mid)}个）", expanded=False):
+                for r in mid:
+                    brief = " | ".join([f"{STRATEGY_INFO.get(k,{}).get('name',k)}:{v}" for k, v in r["details"].items() if v != "数据不足" and v != "量能正常" and v != "动量平淡"])
+                    st.write(f"**{r['name']}** `{r['symbol']}` — 评分 {r['score']} | {brief}")
+
     elif results and _scan_state["is_scanning"]:
-        # 扫描中但还有上次结果，折叠展示旧结果
         with st.expander("📋 上次扫描结果（新扫描完成后自动更新）", expanded=False):
             st.caption(f"⏰ {scan_time}")
             rows = []
             for r in sorted(results, key=lambda x: x.get("score", 0), reverse=True):
                 r["score"] = compute_score(r.get("signals", {}), weights)
                 rows.append({
-                    "信号": f"{signal_emoji(r['score'])} {signal_label(r['score'])}",
-                    "市场": r["market"], "名称": r["name"], "代码": r["symbol"],
-                    "评分": r["score"], "现价": f"{r['price']:.3f}",
+                    "信号": f"{signal_emoji(r['score'])}",
+                    "名称": r["name"], "代码": r["symbol"],
+                    "市场": r["market"], "评分": r["score"], "现价": round(r["price"], 3),
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
     elif not _scan_state["is_scanning"]:
-        st.info("👆 点击「立即扫描」开始")
+        st.info("👆 点击右上角「扫描」按钮开始扫描")
+
 
 # ============================================================
-#  页面2: 个股分析
+#  Tab 2: 个股分析
 # ============================================================
-elif page == "📈 个股分析":
-    st.header("📈 个股分析")
-
+with tabs[1]:
     all_a, all_crypto = get_all_stocks()
     options = build_stock_options(all_a, all_crypto)
 
-    selected = st.selectbox("选择标的", list(options.keys()), index=0)
-    code = options.get(selected, "")
-
-    if code:
-        is_crypto = "/" in code
-        market_label = "加密货币" if is_crypto else "A股"
-        name = all_crypto.get(code, code) if is_crypto else all_a.get(code, code)
-
-        col_info, col_del = st.columns([5, 1])
-        with col_info:
-            pass
-        with col_del:
-            if st.button("🗑️ 移出自选"):
+    col_sel, col_del = st.columns([5, 1])
+    with col_sel:
+        selected = st.selectbox("选择标的", list(options.keys()), index=0, key="stock_select")
+    with col_del:
+        st.markdown("<br>", unsafe_allow_html=True)
+        code = options.get(selected, "")
+        if code:
+            is_crypto = "/" in code
+            name = all_crypto.get(code, code) if is_crypto else all_a.get(code, code)
+            if st.button("🗑️ 移出自选", key="rm_stock"):
                 remove_stock(code)
                 st.success(f"已移除 {name}")
                 st.rerun()
+
+    if code:
+        is_crypto = "/" in code
+        name = all_crypto.get(code, code) if is_crypto else all_a.get(code, code)
+        weights = st.session_state.get("custom_weights", dict(STRATEGY_WEIGHTS))
 
         with st.spinner(f"获取 {name} 数据..."):
             df = fetch_crypto(code, 250) if is_crypto else fetch_a_stock(code, 250)
@@ -455,19 +515,25 @@ elif page == "📈 个股分析":
             st.plotly_chart(draw_kline(df, f"{name}（{code}）"), use_container_width=True)
 
             st.subheader("策略详情")
-            detail_rows = [{"策略": label_map.get(k, k), "信号": details.get(k, ""), "得分": signals.get(k, 0)} for k in STRATEGIES]
+            detail_rows = []
+            for k in STRATEGIES:
+                info = STRATEGY_INFO.get(k, {})
+                detail_rows.append({
+                    "策略": info.get("name", k),
+                    "信号": details.get(k, ""),
+                    "得分": signals.get(k, 0),
+                    "说明": info.get("explain", ""),
+                })
             st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
 
-# ============================================================
-#  页面3: 模拟交易
-# ============================================================
-elif page == "💼 模拟交易":
-    st.header("💼 模拟交易")
 
+# ============================================================
+#  Tab 3: 模拟交易
+# ============================================================
+with tabs[2]:
     pf = load_pf()
     all_a, all_crypto = get_all_stocks()
 
-    # 获取当前价格
     current_prices = {}
     with st.spinner("更新持仓价格..."):
         for sym, pos in pf["positions"].items():
@@ -490,7 +556,6 @@ elif page == "💼 模拟交易":
 
     st.markdown("---")
 
-    # 构建买卖用的下拉选项
     buy_options = build_stock_options(all_a, all_crypto)
 
     col_buy, col_sell = st.columns(2)
@@ -503,7 +568,7 @@ elif page == "💼 模拟交易":
         buy_name = all_crypto.get(buy_code, buy_code) if is_crypto_buy else all_a.get(buy_code, buy_code)
         market_label_buy = "加密货币" if is_crypto_buy else "A股"
 
-        # 显示当前价格
+        cur_price = None
         if buy_code:
             with st.spinner("获取价格..."):
                 cur_price = fetch_price(buy_code, is_crypto_buy)
@@ -566,17 +631,13 @@ elif page == "💼 模拟交易":
             reset_pf()
             st.rerun()
 
-# ============================================================
-#  页面4: 自选管理
-# ============================================================
-elif page == "⚙️ 自选管理":
-    st.header("⚙️ 自选管理")
-    st.caption("搜索添加你关注的标的，移除不想看的")
 
-    all_a, all_crypto = get_all_stocks()
-
-    # 当前自选列表
+# ============================================================
+#  Tab 4: 自选管理
+# ============================================================
+with tabs[3]:
     st.subheader("📋 当前自选")
+    all_a, all_crypto = get_all_stocks()
 
     tab_a, tab_c = st.tabs([f"🇨🇳 A股（{len(all_a)}只）", f"🪙 加密货币（{len(all_crypto)}个）"])
 
@@ -611,7 +672,6 @@ elif page == "⚙️ 自选管理":
                     st.warning("未找到匹配的股票")
                     st.session_state.pop("a_search_results", None)
 
-        # 展示搜索结果
         if "a_search_results" in st.session_state and st.session_state["a_search_results"]:
             st.markdown("**搜索结果：**")
             for item in st.session_state["a_search_results"]:
@@ -627,7 +687,6 @@ elif page == "⚙️ 自选管理":
                         st.markdown("已存在")
                     else:
                         if st.button("添加", key=f"add_a_{c}"):
-                            # 验证数据可用
                             with st.spinner(f"验证 {n} 数据..."):
                                 df = fetch_a_stock(c, 30)
                             if df is not None and len(df) >= 30:
@@ -668,7 +727,6 @@ elif page == "⚙️ 自选管理":
                     st.warning("未找到匹配的币种")
                     st.session_state.pop("c_search_results", None)
 
-        # 展示搜索结果
         if "c_search_results" in st.session_state and st.session_state["c_search_results"]:
             st.markdown("**搜索结果：**")
             for item in st.session_state["c_search_results"]:
@@ -694,9 +752,46 @@ elif page == "⚙️ 自选管理":
                             else:
                                 st.error("❌ 无法获取该交易对数据")
 
-    # 恢复默认
     st.markdown("---")
     if st.button("🔄 恢复默认自选列表"):
         st.session_state[STOCKS_KEY] = _default_stocks()
         st.success("已恢复默认列表")
         st.rerun()
+
+
+# ============================================================
+#  Tab 5: 策略设置（含小白友好注解）
+# ============================================================
+with tabs[4]:
+    st.subheader("🎛️ 策略权重设置")
+    st.caption("调整各策略对评分的影响力度。权重越大，该策略对最终评分影响越大。设为0则忽略该策略。")
+
+    weights = {}
+    for k, default_v in STRATEGY_WEIGHTS.items():
+        info = STRATEGY_INFO.get(k, {})
+        name = info.get("weight_key", k)
+        explain = info.get("explain", "")
+        params_desc = info.get("params", "")
+
+        with st.container():
+            col_slider, col_info = st.columns([3, 2])
+            with col_slider:
+                weights[k] = st.slider(
+                    name, 0.0, 3.0, default_v, 0.1,
+                    key=f"w_{k}",
+                    help=f"{params_desc}",
+                )
+            with col_info:
+                st.caption(f"💡 {explain}")
+
+    # 保存权重到session_state
+    st.session_state["custom_weights"] = weights
+
+    st.markdown("---")
+    st.subheader("📖 策略速查手册")
+    for k, info in STRATEGY_INFO.items():
+        with st.expander(f"{info.get('name', k)} — {info.get('params', '')}"):
+            st.write(info.get("explain", ""))
+
+    st.markdown("---")
+    st.caption("⚠️ 所有策略仅供参考，不构成投资建议。投资有风险，决策需谨慎。")
